@@ -375,3 +375,194 @@
                 document.getElementById('c-reports').innerText = s.size;
                 const tb = document.getElementById('tbl-reports'); tb.innerHTML = "";
                 s.forEach(d => {
+                    const r = d.data();
+                    tb.innerHTML += `<tr><td>${r.name}</td><td>${r.email}</td><td>${r.desc}</td><td><button class="btn-action btn-del" onclick="delRep('${d.id}')">حذف</button></td></tr>`;
+                });
+            });
+
+            // Visits
+            const today = new Date().toISOString().split('T')[0];
+            db.collection('stats').doc('visits').onSnapshot(d => {
+                if(d.exists) document.getElementById('c-visit-d').innerText = d.data()[today] || 0;
+            });
+
+            // Banners
+            db.collection('banners').onSnapshot(s => {
+                const div = document.getElementById('ban-list'); div.innerHTML = "";
+                s.forEach(d => {
+                    div.innerHTML += `
+                    <div style="position:relative; height:100px; border-radius:10px; overflow:hidden">
+                        <img src="${d.data().img}" style="width:100%; height:100%; object-fit:cover">
+                        <button onclick="delBan('${d.id}')" style="position:absolute; top:5px; left:5px; background:red; color:white; border:none; border-radius:5px; cursor:pointer">X</button>
+                    </div>`;
+                });
+            });
+        }
+
+        // --- TABLES RENDER ---
+        function renderUsersTable(list) {
+            const tb = document.getElementById('tbl-users'); tb.innerHTML = "";
+            list.forEach(u => {
+                if(u.role === 'admin') return;
+                const statusBadge = u.status==='banned' ? 'bg-banned' : (u.status==='active'?'bg-active':'bg-pending');
+                
+                // جلب عدد الجلسات من المتغير العام
+                const sessCount = (u.role === 'pro') ? (sessionCounts[u.id] || 0) : '-';
+
+                tb.innerHTML += `
+                <tr>
+                    <td><div style="display:flex;align-items:center;gap:10px"><img src="${u.img}" style="width:30px;height:30px;border-radius:50%"> ${u.name}</div></td>
+                    <td>${u.role==='pro'?'مختص':'مستخدم'}</td>
+                    <td>${u.code || '-'}</td>
+                    <td>${u.points || 0}</td>
+                    <td style="color:var(--primary); font-weight:bold">${sessCount}</td>
+                    <td><span class="badge ${statusBadge}">${u.status}</span></td>
+                    <td><button class="btn-action btn-view" onclick="openDetails('${u.id}')">التفاصيل</button></td>
+                </tr>`;
+            });
+        }
+
+        function renderApprovals(list) {
+            const tb = document.getElementById('tbl-apps'); tb.innerHTML = "";
+            list.forEach(u => {
+                const info = `ولايـة: ${u.wilaya||'-'} | ${u.marital||'-'} | أولاد: ${u.kids||'-'}`;
+                const certBtn = u.cert ? `<button class="btn-action btn-view" onclick="viewCert('${u.cert}')">الشهادة PDF</button>` : 'لا يوجد';
+                tb.innerHTML += `
+                <tr>
+                    <td>${u.name}</td>
+                    <td style="font-size:0.8rem; color:#555">${info}</td>
+                    <td>${certBtn}</td>
+                    <td>
+                        <button class="btn-action btn-check" onclick="approve('${u.id}', true)">قبول</button>
+                        <button class="btn-action btn-del" onclick="approve('${u.id}', false)">رفض</button>
+                    </td>
+                </tr>`;
+            });
+        }
+
+        // --- MODAL & USER DETAILS ---
+        async function openDetails(uid) {
+            selectedUser = allUsers.find(u => u.id === uid);
+            if(!selectedUser) return;
+
+            document.getElementById('d-img').src = selectedUser.img || 'https://via.placeholder.com/100';
+            document.getElementById('d-name').innerText = selectedUser.name;
+            document.getElementById('d-role').innerText = selectedUser.role;
+            document.getElementById('d-pass').value = selectedUser.pass || "******";
+            document.getElementById('d-phone').innerText = selectedUser.phone || '-';
+            document.getElementById('d-email').innerText = selectedUser.email || '-';
+            document.getElementById('d-code').innerText = selectedUser.code || '-';
+            document.getElementById('d-points').value = selectedUser.points || 0;
+            
+            const btnBan = document.getElementById('btn-ban');
+            btnBan.innerText = selectedUser.status === 'banned' ? 'فك الحظر' : 'حظر';
+            btnBan.className = selectedUser.status === 'banned' ? 'btn-action btn-check' : 'btn-action btn-del';
+
+            const revArea = document.getElementById('reviews-area');
+            const revList = document.getElementById('rev-list');
+            revList.innerHTML = "جاري التحميل...";
+            
+            if(selectedUser.role === 'pro') {
+                revArea.classList.remove('hidden'); // إظهار التعليقات للمختص فقط
+                const snaps = await db.collection('reviews').where('pid', '==', uid).get();
+                revList.innerHTML = "";
+                if(snaps.empty) revList.innerHTML = "لا توجد تعليقات.";
+                snaps.forEach(doc => {
+                    const r = doc.data();
+                    revList.innerHTML += `
+                    <div class="review-item">
+                        <div class="review-content">
+                            <b>${r.u} <span style="color:gold">${'⭐'.repeat(r.stars)}</span></b>
+                            <p>${r.comment}</p>
+                        </div>
+                        <button class="btn-action btn-del" onclick="delReview('${doc.id}')">حذف</button>
+                    </div>`;
+                });
+            } else {
+                revArea.classList.add('hidden');
+            }
+
+            document.getElementById('modal-details').style.display = 'flex';
+        }
+
+        function togglePass() {
+            const inp = document.getElementById('d-pass');
+            inp.type = inp.type === 'password' ? 'text' : 'password';
+        }
+
+        async function saveUserChanges() {
+            const p = parseInt(document.getElementById('d-points').value);
+            await db.collection('users').doc(selectedUser.id).update({ points: p });
+            Swal.fire('تم', 'تم تحديث البيانات', 'success');
+            document.getElementById('modal-details').style.display = 'none';
+        }
+
+        async function toggleBan() {
+            const newSt = selectedUser.status === 'banned' ? 'active' : 'banned';
+            await db.collection('users').doc(selectedUser.id).update({ status: newSt });
+            document.getElementById('modal-details').style.display = 'none';
+            Swal.fire('تم', `تم تغيير الحالة إلى ${newSt}`, 'success');
+        }
+
+        async function deleteUser() {
+            if(confirm('هل أنت متأكد من حذف هذا المستخدم نهائياً؟')) {
+                await db.collection('users').doc(selectedUser.id).delete();
+                document.getElementById('modal-details').style.display = 'none';
+                Swal.fire('تم', 'تم الحذف', 'success');
+            }
+        }
+
+        async function delReview(rid) {
+            if(confirm('حذف التعليق؟')) {
+                await db.collection('reviews').doc(rid).delete();
+                openDetails(selectedUser.id);
+            }
+        }
+
+        function closeModal() { document.getElementById('modal-details').style.display = 'none'; }
+
+        // --- ACTIONS ---
+        function filterUsers(val) {
+            val = val.toLowerCase();
+            const filtered = allUsers.filter(u => 
+                u.name.toLowerCase().includes(val) || 
+                (u.code && u.code.toLowerCase().includes(val)) ||
+                (u.phone && u.phone.includes(val))
+            );
+            renderUsersTable(filtered);
+        }
+
+        async function approve(id, ok) {
+            await db.collection('users').doc(id).update({ status: ok ? 'active' : 'rejected' });
+            Swal.fire('تم', ok ? 'تم القبول' : 'تم الرفض', ok ? 'success' : 'error');
+        }
+
+        async function delRep(id) { await db.collection('reports').doc(id).delete(); }
+
+        // CMS Functions
+        const toBase64=f=>new Promise((r,j)=>{const rd=new FileReader();rd.readAsDataURL(f);rd.onload=()=>r(rd.result);rd.onerror=j;});
+        
+        async function updLogo(){const f=document.getElementById('cms-logo').files[0]; if(f){const b=await toBase64(f); db.collection('settings').doc('config').set({logo:b},{merge:true}); Swal.fire('تم','','success');}}
+        async function updBg(){const f=document.getElementById('cms-bg').files[0]; if(f){const b=await toBase64(f); db.collection('settings').doc('config').set({bg:b},{merge:true}); Swal.fire('تم','','success');}}
+        async function addBan(){const f=document.getElementById('ban-img').files[0],l=document.getElementById('ban-link').value,r=document.getElementById('ban-role').value; if(f){const b=await toBase64(f); await db.collection('banners').add({img:b,link:l,target:r}); Swal.fire('تم','','success');}}
+        async function delBan(id){await db.collection('banners').doc(id).delete();}
+        
+        async function sendNotif(){
+            const ar=document.getElementById('nt-ar').value, fr=document.getElementById('nt-fr').value, t=document.getElementById('nt-tar').value;
+            await db.collection('notifs').add({ar,fr,target:t,date:Date.now()});
+            Swal.fire('تم','تم الارسال','success');
+        }
+
+        function viewCert(url) { window.open(url, '_blank'); }
+
+        // --- TABS ---
+        function showTab(id, btn) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.getElementById('tab-'+id).classList.add('active');
+            document.querySelectorAll('.menu-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        }
+
+    </script>
+</body>
+</html>
